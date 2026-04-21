@@ -3,6 +3,14 @@ import { selectAccount, selectNextAccount } from '../account/account.selector.js
 import { updateAccountStatus, updateAccountUsage, Account } from '../account/account.service.js'
 import { recordSuccess, recordFailure } from '../account/account.stats.js'
 import { mapErrorToStatus, shouldRetry, shouldMarkAccount, recoverRateLimited } from '../health/health.service.js'
+import {
+  openaiToAnthropic,
+  anthropicToOpenai,
+  convertStreamChunk,
+  anthropicToOpenaiRequest,
+  openaiToAnthropicResponse,
+  convertStreamChunkOpenaiToAnthropic,
+} from './format_converter.js'
 import { config } from '../../config.js'
 
 export interface ProxyRequest {
@@ -19,11 +27,9 @@ export interface ProxyResult {
   stream: boolean
   streamGenerator?: AsyncGenerator<Uint8Array>
   usedAccountId: number | null
-  // 流式请求的 pendingLog，路由层在流结束后调用以记录日志
   pendingLog?: () => void
 }
 
-// 标准化模型名：统一变体名称
 const normalizeModelName = (model: string | undefined): string => {
   if (!model) return ''
   const lower = model.toLowerCase().replace(/[_\-]/g, '.')
@@ -46,8 +52,8 @@ export const forwardRequest = async (
 
   for (let attempt = 0; attempt < config.maxRetry; attempt++) {
     const account = triedIds.length === 0
-      ? selectAccount(db)
-      : selectNextAccount(db, triedIds)
+      ? selectAccount(db, { modelName: proxyReq.body?.model })
+      : selectNextAccount(db, triedIds, proxyReq.body?.model)
 
     if (!account) {
       return {
@@ -66,7 +72,6 @@ export const forwardRequest = async (
       const duration = Date.now() - startTime
 
       if (result.status >= 200 && result.status < 300) {
-        // 非流式：直接记录日志
         if (!result.stream) {
           const usage = result.body?.usage
           const tokens = extractTokenUsage(usage)
@@ -86,7 +91,6 @@ export const forwardRequest = async (
             duration_ms: duration,
           })
         } else {
-          // 流式：返回 pendingLog，路由层在流消费完后调用
           result.pendingLog = () => {
             const usage = result.streamUsage
             const tokens = extractTokenUsage(usage)
@@ -166,25 +170,56 @@ interface StreamResult {
 }
 
 const doForward = async (account: Account, proxyReq: ProxyRequest): Promise<ProxyResult & { streamUsage?: Record<string, any> }> => {
-  const url = `${account.base_url}${proxyReq.path}`
-  const isStream = proxyReq.body?.stream === true
+  const isAnthropicEntry = proxyReq.path === '/v1/messages'
+  const protocol = account.protocol || 'auto'
+  const isAnthropicBackend = protocol === 'anthropic' || (protocol === 'auto' && (account.base_url.includes('moonshot') || account.base_url.includes('kimi')))
 
-  const headers: Record<string, string> = {
-    ...proxyReq.headers,
-    'x-api-key': account.api_key,
-    host: new URL(account.base_url).host,
-    'user-agent': 'Claude-Code/1.0',
-  }
+  let url: string
+  let body: any = proxyReq.body
+  const headers: Record<string, string> = { ...proxyReq.headers }
   delete headers['authorization']
+  delete headers['x-api-key']
+
+  if (isAnthropicEntry) {
+    // Anthropic 入口
+    if (isAnthropicBackend) {
+      url = `${account.base_url}/v1/messages`
+      headers['x-api-key'] = account.api_key
+      headers['anthropic-version'] = headers['anthropic-version'] || '2023-06-01'
+    } else {
+      // Anthropic → OpenAI 后端
+      body = anthropicToOpenaiRequest(proxyReq.body)
+      url = `${account.base_url}/v1/chat/completions`
+      headers['authorization'] = `Bearer ${account.api_key}`
+    }
+  } else {
+    // OpenAI 入口
+    if (isAnthropicBackend) {
+      // OpenAI → Anthropic 后端
+      body = openaiToAnthropic(proxyReq.body)
+      url = `${account.base_url}/v1/messages`
+      headers['x-api-key'] = account.api_key
+      headers['anthropic-version'] = '2023-06-01'
+    } else {
+      // OpenAI → OpenAI 后端
+      url = `${account.base_url}/v1/chat/completions`
+      headers['authorization'] = `Bearer ${account.api_key}`
+    }
+  }
+
+  headers['host'] = new URL(account.base_url).host
+  headers['user-agent'] = 'Claude-Code/1.0'
+
+  const isStream = body?.stream === true
 
   const resp = await fetch(url, {
     method: proxyReq.method,
     headers,
-    body: JSON.stringify(proxyReq.body),
+    body: JSON.stringify(body),
   })
 
   if (isStream && resp.ok && resp.body) {
-    const { generator, usage } = createStreamWithUsage(resp.body)
+    const { generator, usage } = createStreamWithUsage(resp.body, isAnthropicEntry, isAnthropicBackend)
     return {
       status: resp.status,
       headers: Object.fromEntries(resp.headers.entries()),
@@ -196,29 +231,46 @@ const doForward = async (account: Account, proxyReq: ProxyRequest): Promise<Prox
     }
   }
 
-  let body: any
+  let respBody: any
   try {
-    body = await resp.json()
+    respBody = await resp.json()
   } catch {
-    body = { error: { message: await resp.text().catch(() => 'Unknown error') } }
+    respBody = { error: { message: await resp.text().catch(() => 'Unknown error') } }
   }
+
+  // 非流式响应协议转换
+  if (resp.ok) {
+    if (isAnthropicEntry && !isAnthropicBackend) {
+      respBody = openaiToAnthropicResponse(respBody, proxyReq.body?.model || '')
+    } else if (!isAnthropicEntry && isAnthropicBackend) {
+      respBody = anthropicToOpenai(respBody, proxyReq.body?.model || '')
+    }
+  }
+
   return {
     status: resp.status,
     headers: Object.fromEntries(resp.headers.entries()),
-    body,
+    body: respBody,
     stream: false,
     usedAccountId: account.id,
   }
 }
 
-// 从流式 SSE 中提取 usage，同时透传所有 chunk
-const createStreamWithUsage = (body: ReadableStream<Uint8Array>): StreamResult => {
+// 从流式 SSE 中提取 usage，同时根据协议方向选择转换器
+const createStreamWithUsage = (
+  body: ReadableStream<Uint8Array>,
+  isAnthropicEntry: boolean,
+  isAnthropicBackend: boolean,
+): StreamResult => {
   const usage: Record<string, any> = {}
   let buffer = ''
+
+  const needsConversion = (isAnthropicEntry && !isAnthropicBackend) || (!isAnthropicEntry && isAnthropicBackend)
 
   async function* generator(): AsyncGenerator<Uint8Array> {
     const reader = body.getReader()
     const decoder = new TextDecoder()
+    const encoder = new TextEncoder()
     try {
       while (true) {
         const { done, value } = await reader.read()
@@ -240,10 +292,26 @@ const createStreamWithUsage = (body: ReadableStream<Uint8Array>): StreamResult =
               }
             } catch {}
           }
-        }
 
-        yield value
+          // 协议转换
+          if (needsConversion) {
+            let converted: string | null = null
+            if (isAnthropicEntry && !isAnthropicBackend) {
+              // OpenAI SSE → Anthropic SSE
+              converted = convertStreamChunkOpenaiToAnthropic(line)
+            } else {
+              // Anthropic SSE → OpenAI SSE
+              converted = convertStreamChunk(line, '')
+            }
+            if (converted) {
+              yield encoder.encode(converted)
+            }
+          } else {
+            yield encoder.encode(line + '\n')
+          }
+        }
       }
+
       // 处理剩余 buffer
       if (buffer.trim().startsWith('data:')) {
         try {
@@ -252,6 +320,20 @@ const createStreamWithUsage = (body: ReadableStream<Uint8Array>): StreamResult =
             Object.assign(usage, data.usage)
           }
         } catch {}
+
+        if (needsConversion) {
+          let converted: string | null = null
+          if (isAnthropicEntry && !isAnthropicBackend) {
+            converted = convertStreamChunkOpenaiToAnthropic(buffer)
+          } else {
+            converted = convertStreamChunk(buffer, '')
+          }
+          if (converted) {
+            yield encoder.encode(converted)
+          }
+        } else {
+          yield encoder.encode(buffer + '\n')
+        }
       }
     } finally {
       reader.releaseLock()

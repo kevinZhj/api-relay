@@ -103,3 +103,84 @@ export const convertStreamChunk = (line: string, model: string): string | null =
 const formatChunk = (obj: any): string => {
   return 'data: ' + JSON.stringify(obj) + '\n\n'
 }
+
+// Anthropic 请求 → OpenAI 请求（用于 Anthropic 入口 → OpenAI 后端）
+export const anthropicToOpenaiRequest = (anthropicBody: any): any => {
+  const messages: any[] = []
+  if (anthropicBody.system) {
+    messages.push({ role: 'system', content: anthropicBody.system })
+  }
+  for (const msg of anthropicBody.messages || []) {
+    messages.push({ role: msg.role, content: msg.content })
+  }
+
+  const openai: any = {
+    model: anthropicBody.model,
+    messages,
+    max_tokens: anthropicBody.max_tokens || 4096,
+  }
+  if (anthropicBody.stream) openai.stream = true
+  if (anthropicBody.temperature !== undefined) openai.temperature = anthropicBody.temperature
+  if (anthropicBody.top_p !== undefined) openai.top_p = anthropicBody.top_p
+  return openai
+}
+
+// OpenAI 响应 → Anthropic 响应（用于 Anthropic 入口 → OpenAI 后端）
+export const openaiToAnthropicResponse = (openaiResp: any, model: string): any => {
+  const choice = openaiResp.choices?.[0]
+  const usage = openaiResp.usage || {}
+
+  return {
+    id: openaiResp.id || `msg_${Date.now()}`,
+    type: 'message',
+    role: 'assistant',
+    model,
+    content: [{ type: 'text', text: choice?.message?.content || '' }],
+    stop_reason: choice?.finish_reason === 'stop' ? 'end_turn' : choice?.finish_reason,
+    usage: {
+      input_tokens: usage.prompt_tokens || 0,
+      output_tokens: usage.completion_tokens || 0,
+    },
+  }
+}
+
+// OpenAI SSE chunk → Anthropic SSE chunk
+export const convertStreamChunkOpenaiToAnthropic = (line: string): string | null => {
+  if (!line.startsWith('data:')) return null
+  const data = line.slice(5).trim()
+  if (!data || data === '[DONE]') return null
+
+  let event: any
+  try { event = JSON.parse(data) } catch { return null }
+
+  const choice = event.choices?.[0]
+  if (!choice) return null
+
+  // 首个 chunk：返回 message_start
+  if (choice.delta?.role) {
+    return formatChunk({
+      type: 'message_start',
+      message: { id: event.id, type: 'message', role: 'assistant', model: event.model, content: [] },
+    })
+  }
+
+  // 内容 chunk
+  if (choice.delta?.content) {
+    return formatChunk({
+      type: 'content_block_delta',
+      delta: { type: 'text_delta', text: choice.delta.content },
+      index: 0,
+    })
+  }
+
+  // 结束 chunk
+  if (choice.finish_reason) {
+    return formatChunk({
+      type: 'message_delta',
+      delta: { stop_reason: choice.finish_reason === 'stop' ? 'end_turn' : choice.finish_reason, stop_sequence: null },
+      usage: { output_tokens: 0 },
+    })
+  }
+
+  return null
+}
