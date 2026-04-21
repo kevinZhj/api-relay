@@ -3,6 +3,7 @@ import { config } from './config.js'
 import { initDb, saveDb } from './db/index.js'
 import { existsSync, copyFileSync } from 'node:fs'
 import { Database } from 'sql.js'
+import { startHealthProbes } from './modules/health/probe.service.js'
 
 const start = async () => {
   // 启动前备份现有数据库
@@ -24,7 +25,7 @@ const start = async () => {
   const { createServer } = await import('./server.js')
   const app = createServer(db, markDirty)
 
-  // 定期保存数据库到磁盘（30秒，仅在脏时保存）
+  // 定时保存数据库到磁盘（30秒，仅在脏时保存）
   const saveInterval = setInterval(() => {
     if (!dirty) return
     dirty = false
@@ -34,6 +35,9 @@ const start = async () => {
       console.error('数据库自动保存失败:', err)
     }
   }, 30000)
+
+  // 启动主动健康探测
+  const probeTimer = startHealthProbes(db)
 
   try {
     await app.listen({ port: config.port, host: config.host })
@@ -46,6 +50,7 @@ const start = async () => {
 
   const shutdown = async () => {
     clearInterval(saveInterval)
+    clearInterval(probeTimer)
     console.log('正在关闭...')
     await app.close()
     try {

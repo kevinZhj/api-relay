@@ -17,6 +17,7 @@ import {
   updateAccountStatus,
 } from '../modules/account/account.service.js'
 import { getAccountHealth } from '../modules/health/health.service.js'
+import { getOrCreateStats } from '../modules/account/account.stats.js'
 
 const adminAuth = (request: any): boolean => {
   if (!config.adminKey) return false
@@ -115,6 +116,24 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Database, markDirt
     updateAccountStatus(db, Number(id), newStatus)
     markDirty()
     return getAccount(db, Number(id))
+  })
+
+  // 路由统计
+  app.get('/admin/routing-stats', async () => {
+    const accounts = listAccounts(db)
+    return accounts.map(acc => {
+      const stats = getOrCreateStats(db, acc.id)
+      const failureRate = stats.request_count > 0
+        ? (stats.failure_count / stats.request_count * 100).toFixed(1)
+        : '0.0'
+      return {
+        ...acc,
+        ewma_latency_ms: Math.round(stats.ewma_latency_ms),
+        request_count: stats.request_count,
+        failure_rate: `${failureRate}%`,
+        consecutive_failures: stats.consecutive_failures,
+      }
+    })
   })
 
   // 测试账号连通性
