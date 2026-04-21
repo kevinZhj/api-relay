@@ -1,6 +1,7 @@
 import { Database } from 'sql.js'
 import { selectAccount, selectNextAccount } from '../account/account.selector.js'
 import { updateAccountStatus, updateAccountUsage, Account } from '../account/account.service.js'
+import { recordSuccess, recordFailure } from '../account/account.stats.js'
 import { mapErrorToStatus, shouldRetry, shouldMarkAccount, recoverRateLimited } from '../health/health.service.js'
 import { config } from '../../config.js'
 
@@ -70,6 +71,7 @@ export const forwardRequest = async (
           const usage = result.body?.usage
           const tokens = extractTokenUsage(usage)
           if (tokens > 0) updateAccountUsage(db, account.id, tokens)
+          recordSuccess(db, account.id, duration)
 
           onLog?.({
             api_key_id: apiKeyId,
@@ -89,6 +91,7 @@ export const forwardRequest = async (
             const usage = result.streamUsage
             const tokens = extractTokenUsage(usage)
             if (tokens > 0) updateAccountUsage(db, account.id, tokens)
+            recordSuccess(db, account.id, Date.now() - startTime)
 
             onLog?.({
               api_key_id: apiKeyId,
@@ -109,6 +112,7 @@ export const forwardRequest = async (
       }
 
       lastError = result
+      recordFailure(db, account.id)
       if (shouldMarkAccount(result.status)) {
         const newStatus = mapErrorToStatus(result.status)
         updateAccountStatus(db, account.id, newStatus, `HTTP ${result.status}`)
@@ -129,6 +133,7 @@ export const forwardRequest = async (
       }
     } catch (err: any) {
       lastError = err
+      recordFailure(db, account.id)
     }
   }
 
