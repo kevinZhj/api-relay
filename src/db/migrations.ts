@@ -41,4 +41,27 @@ export const MIGRATIONS = [
   `ALTER TABLE usage_logs ADD COLUMN cache_read_tokens INTEGER DEFAULT 0`,
   // 迁移：为 accounts 表添加模型字段
   `ALTER TABLE accounts ADD COLUMN models TEXT DEFAULT ''`,
+  // 迁移：新增账号统计表
+  `CREATE TABLE IF NOT EXISTS account_stats (
+    account_id INTEGER PRIMARY KEY,
+    ewma_latency_ms REAL DEFAULT 0,
+    request_count INTEGER DEFAULT 0,
+    failure_count INTEGER DEFAULT 0,
+    consecutive_failures INTEGER DEFAULT 0,
+    updated_at TEXT DEFAULT (datetime('now'))
+  )`,
+  // 迁移：新增健康探测日志表
+  `CREATE TABLE IF NOT EXISTS health_probes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    is_success INTEGER DEFAULT 0,
+    latency_ms INTEGER,
+    error_code TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  )`,
+  // 迁移：为 accounts 表扩展字段
+  `ALTER TABLE accounts ADD COLUMN brand TEXT DEFAULT ''`,
+  `ALTER TABLE accounts ADD COLUMN protocol TEXT DEFAULT 'auto'`,
+  `ALTER TABLE accounts ADD COLUMN weight INTEGER DEFAULT 100`,
+  `ALTER TABLE accounts ADD COLUMN is_default INTEGER DEFAULT 0`,
 ]
