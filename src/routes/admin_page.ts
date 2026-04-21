@@ -115,7 +115,7 @@ tr:hover td { background: #334155; }
       <button class="btn btn-primary" onclick="showAddAccount()">添加账号</button>
     </div>
     <table>
-      <thead><tr><th>ID</th><th>名称</th><th>API Key</th><th>Base URL</th><th>可用模型</th><th>状态</th><th>优先级</th><th>已用额度</th><th>最后错误</th><th>操作</th></tr></thead>
+      <thead><tr><th>ID</th><th>名称</th><th>协议</th><th>API Key</th><th>Base URL</th><th>模型</th><th>状态</th><th>优先级</th><th>响应时间</th><th>成功率</th><th>连败</th><th>已用额度</th><th>最后错误</th><th>操作</th></tr></thead>
       <tbody id="accountsBody"></tbody>
     </table>
   </div>
@@ -152,6 +152,12 @@ tr:hover td { background: #334155; }
     <label>API Key</label><input id="accKey" placeholder="sk-xxx">
     <label>Base URL</label><input id="accUrl" placeholder="https://api.moonshot.cn/v1">
     <label>可用模型（逗号分隔）</label><input id="accModels" placeholder="kimi-k2.5,claude-sonnet-4-6">
+    <label>协议</label>
+    <select id="accProtocol">
+      <option value="auto" selected>auto (自动检测)</option>
+      <option value="anthropic">anthropic (Kimi)</option>
+      <option value="openai">openai (GLM)</option>
+    </select>
     <label>优先级（越大越优先）</label><input id="accPriority" type="number" value="0">
     <div class="btn-row">
       <button class="btn" onclick="closeDialog('addAccountDialog')">取消</button>
@@ -168,6 +174,12 @@ tr:hover td { background: #334155; }
     <label>API Key</label><input id="editAccKey">
     <label>Base URL</label><input id="editAccUrl">
     <label>可用模型（逗号分隔）</label><input id="editAccModels">
+    <label>协议</label>
+    <select id="editAccProtocol">
+      <option value="auto">auto (自动检测)</option>
+      <option value="anthropic">anthropic (Kimi)</option>
+      <option value="openai">openai (GLM)</option>
+    </select>
     <label>优先级</label><input id="editAccPriority" type="number">
     <div class="btn-row">
       <button class="btn" onclick="closeDialog('editAccountDialog')">取消</button>
@@ -302,15 +314,27 @@ async function loadHealth() {
 }
 
 async function loadAccounts() {
-  const list = await api('GET', '/admin/accounts')
-  if (!list.length) { document.getElementById('accountsBody').innerHTML = '<tr><td colspan="10" class="empty">暂无账号</td></tr>'; return }
-  document.getElementById('accountsBody').innerHTML = list.map(a =>
-    '<tr><td>' + a.id + '</td><td>' + a.name + '</td>' +
+  const [list, stats] = await Promise.all([
+    api('GET', '/admin/accounts'),
+    api('GET', '/admin/routing-stats').catch(() => [])
+  ])
+  const statMap = {}
+  for (const s of stats) statMap[s.id] = s
+
+  if (!list.length) { document.getElementById('accountsBody').innerHTML = '<tr><td colspan="14" class="empty">暂无账号</td></tr>'; return }
+  document.getElementById('accountsBody').innerHTML = list.map(a => {
+    const st = statMap[a.id] || {}
+    const latencyColor = st.ewma_latency_ms > 3000 ? 'color:#ef4444' : (st.ewma_latency_ms > 1000 ? 'color:#eab308' : 'color:#22c55e')
+    return '<tr><td>' + a.id + '</td><td>' + a.name + '</td>' +
+    '<td><span class="badge ' + (a.protocol || 'auto') + '">' + (a.protocol || 'auto') + '</span></td>' +
     '<td><span class="key-text">' + a.api_key.slice(0, 12) + '...' + a.api_key.slice(-4) + '</span></td>' +
     '<td><span class="key-text">' + (a.base_url || '-') + '</span></td>' +
     '<td>' + (a.models || '-') + '</td>' +
     '<td><span class="badge ' + a.status + '">' + a.status + '</span></td>' +
     '<td>' + a.priority + '</td>' +
+    '<td style="' + latencyColor + '">' + (st.ewma_latency_ms || 0) + 'ms</td>' +
+    '<td>' + (st.failure_rate || '0.0%') + '</td>' +
+    '<td>' + (st.consecutive_failures || 0) + '</td>' +
     '<td>' + a.used_quota + '</td>' +
     '<td>' + (a.last_error || '-') + '</td>' +
     '<td>' +
@@ -321,7 +345,7 @@ async function loadAccounts() {
         : '<button class="btn btn-success btn-sm" onclick="toggleAccount(' + a.id + ')">启用</button>') +
       '<button class="btn btn-danger btn-sm" onclick="delAccount(' + a.id + ')">删除</button>' +
     '</td></tr>'
-  ).join('')
+  }).join('')
 }
 
 async function loadKeys() {
@@ -394,6 +418,7 @@ async function showEditAccount(id) {
   document.getElementById('editAccKey').value = a.api_key
   document.getElementById('editAccUrl').value = a.base_url || ''
   document.getElementById('editAccModels').value = a.models || ''
+  document.getElementById('editAccProtocol').value = a.protocol || 'auto'
   document.getElementById('editAccPriority').value = a.priority
   showDialog('editAccountDialog')
 }
@@ -405,11 +430,13 @@ async function doEditAccount() {
   const api_key = document.getElementById('editAccKey').value.trim()
   const base_url = document.getElementById('editAccUrl').value.trim()
   const models = document.getElementById('editAccModels').value.trim()
+  const protocol = document.getElementById('editAccProtocol').value
   const priority = document.getElementById('editAccPriority').value
   if (name) body.name = name
   if (api_key) body.api_key = api_key
   if (base_url) body.base_url = base_url
   if (models !== undefined) body.models = models
+  if (protocol) body.protocol = protocol
   if (priority !== '') body.priority = Number(priority)
   try {
     await api('PUT', '/admin/accounts/' + id, body)
@@ -475,9 +502,11 @@ async function doAddAccount() {
   const body = { name, api_key }
   const url = document.getElementById('accUrl').value.trim()
   const models = document.getElementById('accModels').value.trim()
+  const protocol = document.getElementById('accProtocol').value
   const priority = document.getElementById('accPriority').value
   if (url) body.base_url = url
   if (models) body.models = models
+  if (protocol) body.protocol = protocol
   if (priority) body.priority = Number(priority)
   try {
     await api('POST', '/admin/accounts', body)
@@ -488,6 +517,7 @@ async function doAddAccount() {
     document.getElementById('accKey').value = ''
     document.getElementById('accUrl').value = ''
     document.getElementById('accModels').value = ''
+    document.getElementById('accProtocol').value = 'auto'
     document.getElementById('accPriority').value = '0'
   } catch (err) {
     toast('添加失败: ' + err.message, 'error')

@@ -1,35 +1,18 @@
 @echo off
+chcp 65001 >nul
+cd /d "%~dp0"
 
-echo ==========================================
-echo API Relay Server
-echo ==========================================
+if not exist "node_modules" (
+    echo Installing dependencies...
+    call pnpm install
+)
+
+echo.
+echo Starting API Relay...
+echo URL: http://localhost:3000
+echo Admin: http://localhost:3000/admin/accounts
 echo.
 
-if not exist .env (
-  echo [ERROR] .env file not found
-  echo Please copy .env.example to .env first
-  echo.
-  echo   copy .env.example .env
-  echo.
-  pause
-  exit /b 1
-)
+pnpm start
 
-if not exist node_modules (
-  echo [ERROR] node_modules not found
-  echo Please run: npm install
-  echo.
-  pause
-  exit /b 1
-)
-
-echo Starting server...
-echo.
-
-pnpm run start
-
-if %errorlevel% neq 0 (
-  echo.
-  echo [ERROR] Start failed
-  pause
-)
+pause
