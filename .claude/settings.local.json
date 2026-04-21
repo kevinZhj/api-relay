@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(taskkill //F //IM \"node.exe\" //FI \"WINDOWTITLE eq tsx*\")",
+      "Bash(taskkill //F //PID 47188)",
+      "Bash(taskkill //F //PID 30876)",
+      "Bash(taskkill:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(cmd:*)",
+      "Bash(wmic process:*)",
+      "Bash(sc config:*)",
+      "Bash(sc stop:*)",
+      "Bash(reg add:*)",
+      "Bash(wsl hostname:*)",
+      "Bash(wsl cat:*)",
+      "Bash(wsl bash:*)",
+      "Bash(ipconfig)",
+      "Bash(wsl --shutdown)",
+      "Bash(wsl echo:*)",
+      "Read(///wsl$/Ubuntu/home/administrator/.hermes/**)",
+      "Bash(sed -i 's/^RELAY_API_KEY=.*/RELAY_API_KEY=sk-relay-43e90c676f21c06f88c53238bfccd0a67f35d8144f7756fa/' \"//wsl$/Ubuntu/home/administrator/.hermes/.env\")",
+      "Bash(findstr \"LISTENING\")",
+      "Bash(tasklist)",
+      "Bash(findstr -i \"miniqmt\\\\|xtquant\\\\|qmt\\\\|xtp\")",
+      "Bash(findstr \"15344\")",
+      "Bash(findstr \"3000\")"
+    ]
+  }
+}

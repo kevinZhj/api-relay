@@ -1,0 +1,264 @@
+import { Database } from 'sql.js'
+import { selectAccount, selectNextAccount } from '../account/account.selector.js'
+import { updateAccountStatus, updateAccountUsage, Account } from '../account/account.service.js'
+import { mapErrorToStatus, shouldRetry, shouldMarkAccount, recoverRateLimited } from '../health/health.service.js'
+import { config } from '../../config.js'
+
+export interface ProxyRequest {
+  method: string
+  path: string
+  headers: Record<string, string>
+  body: any
+}
+
+export interface ProxyResult {
+  status: number
+  headers: Record<string, string>
+  body: any
+  stream: boolean
+  streamGenerator?: AsyncGenerator<Uint8Array>
+  usedAccountId: number | null
+  // 流式请求的 pendingLog，路由层在流结束后调用以记录日志
+  pendingLog?: () => void
+}
+
+// 标准化模型名：统一变体名称
+const normalizeModelName = (model: string | undefined): string => {
+  if (!model) return ''
+  const lower = model.toLowerCase().replace(/[_\-]/g, '.')
+  if (lower === 'k2.6.code.preview') return 'K2.6-code-preview'
+  if (lower === 'kimi.k2.5') return 'K2.6-code-preview'
+  return model
+}
+
+export const forwardRequest = async (
+  db: Database,
+  proxyReq: ProxyRequest,
+  apiKeyId: number,
+  onLog?: (log: Record<string, any>) => void,
+): Promise<ProxyResult> => {
+  const startTime = Date.now()
+  recoverRateLimited(db)
+
+  const triedIds: number[] = []
+  let lastError: any = null
+
+  for (let attempt = 0; attempt < config.maxRetry; attempt++) {
+    const account = triedIds.length === 0
+      ? selectAccount(db)
+      : selectNextAccount(db, triedIds)
+
+    if (!account) {
+      return {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+        body: { error: { message: '没有可用的后端账号', type: 'server_error' } },
+        stream: false,
+        usedAccountId: null,
+      }
+    }
+
+    triedIds.push(account.id)
+
+    try {
+      const result = await doForward(account, proxyReq)
+      const duration = Date.now() - startTime
+
+      if (result.status >= 200 && result.status < 300) {
+        // 非流式：直接记录日志
+        if (!result.stream) {
+          const usage = result.body?.usage
+          const tokens = extractTokenUsage(usage)
+          if (tokens > 0) updateAccountUsage(db, account.id, tokens)
+
+          onLog?.({
+            api_key_id: apiKeyId,
+            account_id: account.id,
+            model: normalizeModelName(proxyReq.body?.model),
+            prompt_tokens: usage?.prompt_tokens || usage?.input_tokens || null,
+            completion_tokens: usage?.completion_tokens || usage?.output_tokens || null,
+            cache_creation_tokens: usage?.cache_creation_input_tokens || null,
+            cache_read_tokens: usage?.cache_read_input_tokens || null,
+            is_success: 1,
+            error_code: null,
+            duration_ms: duration,
+          })
+        } else {
+          // 流式：返回 pendingLog，路由层在流消费完后调用
+          result.pendingLog = () => {
+            const usage = result.streamUsage
+            const tokens = extractTokenUsage(usage)
+            if (tokens > 0) updateAccountUsage(db, account.id, tokens)
+
+            onLog?.({
+              api_key_id: apiKeyId,
+              account_id: account.id,
+              model: normalizeModelName(proxyReq.body?.model),
+              prompt_tokens: usage?.prompt_tokens || usage?.input_tokens || null,
+              completion_tokens: usage?.completion_tokens || usage?.output_tokens || null,
+              cache_creation_tokens: usage?.cache_creation_input_tokens || null,
+              cache_read_tokens: usage?.cache_read_input_tokens || null,
+              is_success: 1,
+              error_code: null,
+              duration_ms: Date.now() - startTime,
+            })
+          }
+        }
+
+        return result
+      }
+
+      lastError = result
+      if (shouldMarkAccount(result.status)) {
+        const newStatus = mapErrorToStatus(result.status)
+        updateAccountStatus(db, account.id, newStatus, `HTTP ${result.status}`)
+      }
+
+      if (!shouldRetry(result.status)) {
+        onLog?.({
+          api_key_id: apiKeyId,
+          account_id: account.id,
+          model: normalizeModelName(proxyReq.body?.model),
+          prompt_tokens: null,
+          completion_tokens: null,
+          is_success: 0,
+          error_code: String(result.status),
+          duration_ms: duration,
+        })
+        return result
+      }
+    } catch (err: any) {
+      lastError = err
+    }
+  }
+
+  const duration = Date.now() - startTime
+  onLog?.({
+    api_key_id: apiKeyId,
+    account_id: null,
+    model: normalizeModelName(proxyReq.body?.model),
+    prompt_tokens: null,
+    completion_tokens: null,
+    is_success: 0,
+    error_code: lastError?.status ? String(lastError.status) : 'network_error',
+    duration_ms: duration,
+  })
+
+  if (lastError?.status) return lastError
+
+  return {
+    status: 502,
+    headers: { 'content-type': 'application/json' },
+    body: { error: { message: '后端请求失败', type: 'server_error' } },
+    stream: false,
+    usedAccountId: null,
+  }
+}
+
+interface StreamResult {
+  generator: AsyncGenerator<Uint8Array>
+  usage: Record<string, any>
+}
+
+const doForward = async (account: Account, proxyReq: ProxyRequest): Promise<ProxyResult & { streamUsage?: Record<string, any> }> => {
+  const url = `${account.base_url}${proxyReq.path}`
+  const isStream = proxyReq.body?.stream === true
+
+  const headers: Record<string, string> = {
+    ...proxyReq.headers,
+    'x-api-key': account.api_key,
+    host: new URL(account.base_url).host,
+    'user-agent': 'Claude-Code/1.0',
+  }
+  delete headers['authorization']
+
+  const resp = await fetch(url, {
+    method: proxyReq.method,
+    headers,
+    body: JSON.stringify(proxyReq.body),
+  })
+
+  if (isStream && resp.ok && resp.body) {
+    const { generator, usage } = createStreamWithUsage(resp.body)
+    return {
+      status: resp.status,
+      headers: Object.fromEntries(resp.headers.entries()),
+      body: null,
+      stream: true,
+      streamGenerator: generator,
+      usedAccountId: account.id,
+      streamUsage: usage,
+    }
+  }
+
+  let body: any
+  try {
+    body = await resp.json()
+  } catch {
+    body = { error: { message: await resp.text().catch(() => 'Unknown error') } }
+  }
+  return {
+    status: resp.status,
+    headers: Object.fromEntries(resp.headers.entries()),
+    body,
+    stream: false,
+    usedAccountId: account.id,
+  }
+}
+
+// 从流式 SSE 中提取 usage，同时透传所有 chunk
+const createStreamWithUsage = (body: ReadableStream<Uint8Array>): StreamResult => {
+  const usage: Record<string, any> = {}
+  let buffer = ''
+
+  async function* generator(): AsyncGenerator<Uint8Array> {
+    const reader = body.getReader()
+    const decoder = new TextDecoder()
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data:')) {
+            try {
+              const data = JSON.parse(line.slice(5).trim())
+              if (data.type === 'message_start' && data.message?.usage) {
+                Object.assign(usage, data.message.usage)
+              }
+              if (data.type === 'message_delta' && data.usage) {
+                Object.assign(usage, data.usage)
+              }
+            } catch {}
+          }
+        }
+
+        yield value
+      }
+      // 处理剩余 buffer
+      if (buffer.trim().startsWith('data:')) {
+        try {
+          const data = JSON.parse(buffer.trim().slice(5).trim())
+          if (data.type === 'message_delta' && data.usage) {
+            Object.assign(usage, data.usage)
+          }
+        } catch {}
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  }
+
+  return { generator: generator(), usage }
+}
+
+const extractTokenUsage = (usage: any): number => {
+  if (!usage) return 0
+  const input = usage.prompt_tokens || usage.input_tokens || 0
+  const output = usage.completion_tokens || usage.output_tokens || 0
+  return input + output
+}
