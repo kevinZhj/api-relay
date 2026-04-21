@@ -115,7 +115,7 @@ tr:hover td { background: #334155; }
       <button class="btn btn-primary" onclick="showAddAccount()">添加账号</button>
     </div>
     <table>
-      <thead><tr><th>ID</th><th>名称</th><th>协议</th><th>API Key</th><th>Base URL</th><th>模型</th><th>状态</th><th>优先级</th><th>响应时间</th><th>成功率</th><th>连败</th><th>已用额度</th><th>最后错误</th><th>操作</th></tr></thead>
+      <thead><tr><th>ID</th><th>名称</th><th>Brand</th><th>协议</th><th>API Key</th><th>Base URL</th><th>模型</th><th>状态</th><th>优先级</th><th>响应时间</th><th>成功率</th><th>连败</th><th>已用额度</th><th>最后错误</th><th>操作</th></tr></thead>
       <tbody id="accountsBody"></tbody>
     </table>
   </div>
@@ -128,7 +128,7 @@ tr:hover td { background: #334155; }
     <div id="keyUrlBar" style="background:#1e293b;border:1px solid #334155;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;gap:24px;font-size:13px">
     </div>
     <table>
-      <thead><tr><th>ID</th><th>名称</th><th>Key</th><th>状态</th><th>速率限制</th><th>使用统计</th><th>操作</th></tr></thead>
+      <thead><tr><th>ID</th><th>名称</th><th>Brand</th><th>Key</th><th>状态</th><th>速率限制</th><th>使用统计</th><th>操作</th></tr></thead>
       <tbody id="keysBody"></tbody>
     </table>
   </div>
@@ -158,6 +158,12 @@ tr:hover td { background: #334155; }
       <option value="anthropic">anthropic (Kimi)</option>
       <option value="openai">openai (GLM)</option>
     </select>
+    <label>Brand</label>
+    <select id=accBrand>
+      <option value=" selected>Unlimited</option>
+      <option value=kimi>kimi</option>
+      <option value=glm>glm</option>
+    </select>
     <label>优先级（越大越优先）</label><input id="accPriority" type="number" value="0">
     <div class="btn-row">
       <button class="btn" onclick="closeDialog('addAccountDialog')">取消</button>
@@ -179,6 +185,12 @@ tr:hover td { background: #334155; }
       <option value="auto">auto (自动检测)</option>
       <option value="anthropic">anthropic (Kimi)</option>
       <option value="openai">openai (GLM)</option>
+    </select>
+    <label>Brand</label>
+    <select id=editAccBrand>
+      <option value=">Unlimited</option>
+      <option value=kimi>kimi</option>
+      <option value=glm>glm</option>
     </select>
     <label>优先级</label><input id="editAccPriority" type="number">
     <div class="btn-row">
@@ -206,6 +218,12 @@ tr:hover td { background: #334155; }
     <h3>生成设备 Key</h3>
     <label>设备名称</label><input id="keyName" placeholder="如：我的电脑">
     <label>速率限制（请求/分钟）</label><input id="keyRate" type="number" value="60">
+    <label>Brand</label>
+    <select id=keyBrand>
+      <option value=" selected>Unlimited</option>
+      <option value=kimi>kimi</option>
+      <option value=glm>glm</option>
+    </select>
     <div class="btn-row">
       <button class="btn" onclick="closeDialog('addKeyDialog')">取消</button>
       <button class="btn btn-primary" onclick="doAddKey()">生成</button>
@@ -321,11 +339,12 @@ async function loadAccounts() {
   const statMap = {}
   for (const s of stats) statMap[s.id] = s
 
-  if (!list.length) { document.getElementById('accountsBody').innerHTML = '<tr><td colspan="14" class="empty">暂无账号</td></tr>'; return }
+  if (!list.length) { document.getElementById('accountsBody').innerHTML = '<tr><td colspan="15" class="empty">暂无账号</td></tr>'; return }
   document.getElementById('accountsBody').innerHTML = list.map(a => {
     const st = statMap[a.id] || {}
     const latencyColor = st.ewma_latency_ms > 3000 ? 'color:#ef4444' : (st.ewma_latency_ms > 1000 ? 'color:#eab308' : 'color:#22c55e')
     return '<tr><td>' + a.id + '</td><td>' + a.name + '</td>' +
+    '<td>' + (a.brand || '-') + '</td>' +
     '<td><span class="badge ' + (a.protocol || 'auto') + '">' + (a.protocol || 'auto') + '</span></td>' +
     '<td><span class="key-text">' + a.api_key.slice(0, 12) + '...' + a.api_key.slice(-4) + '</span></td>' +
     '<td><span class="key-text">' + (a.base_url || '-') + '</span></td>' +
@@ -355,7 +374,7 @@ async function loadKeys() {
   document.getElementById('keyUrlBar').innerHTML =
     '<div><span style="color:#94a3b8">Anthropic: </span><span class="key-text">' + base + '/</span></div>' +
     '<div><span style="color:#94a3b8">OpenAI: </span><span class="key-text">' + base + '/v1</span></div>'
-  if (!list.length) { document.getElementById('keysBody').innerHTML = '<tr><td colspan="7" class="empty">暂无 Key</td></tr>'; return }
+  if (!list.length) { document.getElementById('keysBody').innerHTML = '<tr><td colspan="8" class="empty">暂无 Key</td></tr>'; return }
   // 按 api_key_id 分组统计
   const keyStats = {}
   for (const s of stats) {
@@ -378,6 +397,7 @@ async function loadKeys() {
         ).join('')
       : '<div style="font-size:12px;color:#475569">暂无使用数据</div>'
     return '<tr><td>' + k.id + '</td><td>' + k.name + '</td>' +
+    '<td>' + (k.brand || '-') + '</td>' +
     '<td><span class="key-text" id="key-' + k.id + '">' + k.key + '</span>' +
     '<span class="copy-btn" onclick="copyKey(' + k.id + ')">复制</span></td>' +
     '<td><span class="badge ' + (k.is_active ? 'active' : 'disabled') + '">' + (k.is_active ? '启用' : '禁用') + '</span></td>' +
@@ -419,6 +439,7 @@ async function showEditAccount(id) {
   document.getElementById('editAccUrl').value = a.base_url || ''
   document.getElementById('editAccModels').value = a.models || ''
   document.getElementById('editAccProtocol').value = a.protocol || 'auto'
+  document.getElementById('editAccBrand').value = a.brand || ''
   document.getElementById('editAccPriority').value = a.priority
   showDialog('editAccountDialog')
 }
@@ -431,12 +452,14 @@ async function doEditAccount() {
   const base_url = document.getElementById('editAccUrl').value.trim()
   const models = document.getElementById('editAccModels').value.trim()
   const protocol = document.getElementById('editAccProtocol').value
+  const brand = document.getElementById('editAccBrand').value
   const priority = document.getElementById('editAccPriority').value
   if (name) body.name = name
   if (api_key) body.api_key = api_key
   if (base_url) body.base_url = base_url
   if (models !== undefined) body.models = models
   if (protocol) body.protocol = protocol
+  if (brand !== undefined) body.brand = brand
   if (priority !== '') body.priority = Number(priority)
   try {
     await api('PUT', '/admin/accounts/' + id, body)
@@ -503,10 +526,12 @@ async function doAddAccount() {
   const url = document.getElementById('accUrl').value.trim()
   const models = document.getElementById('accModels').value.trim()
   const protocol = document.getElementById('accProtocol').value
+  const brand = document.getElementById('accBrand').value
   const priority = document.getElementById('accPriority').value
   if (url) body.base_url = url
   if (models) body.models = models
   if (protocol) body.protocol = protocol
+  if (brand) body.brand = brand
   if (priority) body.priority = Number(priority)
   try {
     await api('POST', '/admin/accounts', body)
@@ -518,6 +543,7 @@ async function doAddAccount() {
     document.getElementById('accUrl').value = ''
     document.getElementById('accModels').value = ''
     document.getElementById('accProtocol').value = 'auto'
+    document.getElementById('accBrand').value = ''
     document.getElementById('accPriority').value = '0'
   } catch (err) {
     toast('添加失败: ' + err.message, 'error')
@@ -528,12 +554,14 @@ async function doAddKey() {
   const name = document.getElementById('keyName').value.trim()
   if (!name) { toast('请填写设备名称', 'error'); return }
   const rate_limit = Number(document.getElementById('keyRate').value) || 60
-  const r = await api('POST', '/admin/api-keys', { name, rate_limit })
+  const brand = document.getElementById('keyBrand').value
+  const r = await api('POST', '/admin/api-keys', { name, brand, rate_limit })
   closeDialog('addKeyDialog')
   toast('Key 已生成: ' + r.key)
   loadKeys()
   document.getElementById('keyName').value = ''
   document.getElementById('keyRate').value = '60'
+  document.getElementById('keyBrand').value = ''
 }
 
 async function toggleAccount(id) { await api('POST', '/admin/accounts/' + id + '/toggle'); loadAccounts(); loadHealth() }

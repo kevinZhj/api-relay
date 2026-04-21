@@ -42,6 +42,7 @@ export const forwardRequest = async (
   db: Database,
   proxyReq: ProxyRequest,
   apiKeyId: number,
+  brand?: string,
   onLog?: (log: Record<string, any>) => void,
 ): Promise<ProxyResult> => {
   const startTime = Date.now()
@@ -51,9 +52,10 @@ export const forwardRequest = async (
   let lastError: any = null
 
   for (let attempt = 0; attempt < config.maxRetry; attempt++) {
+    const normalizedModel = normalizeModelName(proxyReq.body?.model)
     const account = triedIds.length === 0
-      ? selectAccount(db, { modelName: proxyReq.body?.model })
-      : selectNextAccount(db, triedIds, proxyReq.body?.model)
+      ? selectAccount(db, { modelName: normalizedModel, brand })
+      : selectNextAccount(db, triedIds, normalizedModel, brand)
 
     if (!account) {
       return {

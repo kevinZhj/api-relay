@@ -64,4 +64,5 @@ export const MIGRATIONS = [
   `ALTER TABLE accounts ADD COLUMN protocol TEXT DEFAULT 'auto'`,
   `ALTER TABLE accounts ADD COLUMN weight INTEGER DEFAULT 100`,
   `ALTER TABLE accounts ADD COLUMN is_default INTEGER DEFAULT 0`,
+  `ALTER TABLE api_keys ADD COLUMN brand TEXT DEFAULT ''`,
 ]

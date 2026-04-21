@@ -45,7 +45,7 @@ describe('API Key 管理', () => {
     })
 
     it('应该支持自定义速率限制', () => {
-      const apiKey = createApiKey(db, '高速设备', 120)
+      const apiKey = createApiKey(db, '高速设备', '', 120)
       expect(apiKey.rate_limit).toBe(120)
     })
   })

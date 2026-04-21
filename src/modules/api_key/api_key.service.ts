@@ -8,6 +8,7 @@ export interface ApiKey {
   name: string
   is_active: number
   rate_limit: number
+  brand: string
   created_at: string
 }
 
@@ -15,11 +16,11 @@ export const generateApiKey = (): string => {
   return `sk-relay-${crypto.randomBytes(24).toString('hex')}`
 }
 
-export const createApiKey = (db: Database, name: string, rateLimit = 60): ApiKey => {
+export const createApiKey = (db: Database, name: string, brand = '', rateLimit = 60): ApiKey => {
   const key = generateApiKey()
   const id = runInsert(db,
-    'INSERT INTO api_keys (key, name, rate_limit) VALUES (?, ?, ?)',
-    [key, name, rateLimit]
+    'INSERT INTO api_keys (key, name, brand, rate_limit) VALUES (?, ?, ?, ?)',
+    [key, name, brand, rateLimit]
   )
   return queryOne(db, 'SELECT * FROM api_keys WHERE id = ?', [id]) as ApiKey
 }

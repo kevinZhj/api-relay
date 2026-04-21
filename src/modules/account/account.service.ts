@@ -16,6 +16,10 @@ export interface Account {
   last_used_at: string | null
   created_at: string
   updated_at: string
+  brand: string
+  protocol: string
+  weight: number
+  is_default: number
 }
 
 export interface CreateAccountInput {
@@ -24,12 +28,13 @@ export interface CreateAccountInput {
   base_url?: string
   models?: string
   priority?: number
+  brand?: string
 }
 
 export const createAccount = (db: Database, input: CreateAccountInput): Account => {
   const id = runInsert(db,
-    'INSERT INTO accounts (name, api_key, base_url, models, priority) VALUES (?, ?, ?, ?, ?)',
-    [input.name, input.api_key, input.base_url || 'https://api.moonshot.cn/v1', input.models || '', input.priority || 0]
+    'INSERT INTO accounts (name, api_key, base_url, models, brand, priority) VALUES (?, ?, ?, ?, ?, ?)',
+    [input.name, input.api_key, input.base_url || 'https://api.moonshot.cn/v1', input.models || '', input.brand || '', input.priority || 0]
   )
   return queryOne(db, 'SELECT * FROM accounts WHERE id = ?', [id]) as Account
 }
@@ -51,6 +56,7 @@ export const updateAccount = (db: Database, id: number, input: Partial<CreateAcc
   if (input.api_key !== undefined) { fields.push('api_key = ?'); values.push(input.api_key) }
   if (input.base_url !== undefined) { fields.push('base_url = ?'); values.push(input.base_url) }
   if (input.models !== undefined) { fields.push('models = ?'); values.push(input.models) }
+  if (input.brand !== undefined) { fields.push('brand = ?'); values.push(input.brand) }
   if (input.priority !== undefined) { fields.push('priority = ?'); values.push(input.priority) }
   if (fields.length === 0) return account
   fields.push("updated_at = datetime('now')")

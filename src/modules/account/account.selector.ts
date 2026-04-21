@@ -7,6 +7,7 @@ import { config } from '../../config.js'
 export interface RoutingOptions {
   excludeIds?: number[]
   modelName?: string
+  brand?: string
 }
 
 const ALPHA = 1 - Math.exp(-Math.LN2 / 10)
@@ -62,6 +63,10 @@ export const selectAccount = (db: Database, options?: RoutingOptions): Account |
     })
   }
 
+  if (options?.brand) {
+    candidates = candidates.filter(a => a.brand === options.brand)
+  }
+
   if (candidates.length === 0) return null
 
   // 计算分数并排序，分数低的优先
@@ -83,6 +88,6 @@ export const selectAccount = (db: Database, options?: RoutingOptions): Account |
   return scored[0]?.account || null
 }
 
-export const selectNextAccount = (db: Database, excludeIds: number[], modelName?: string): Account | null => {
-  return selectAccount(db, { excludeIds, modelName })
+export const selectNextAccount = (db: Database, excludeIds: number[], modelName?: string, brand?: string): Account | null => {
+  return selectAccount(db, { excludeIds, modelName, brand })
 }

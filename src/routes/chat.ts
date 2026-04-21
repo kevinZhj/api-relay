@@ -34,6 +34,7 @@ export const registerChatRoutes = (app: FastifyInstance, db: Database, markDirty
         body: anthropicBody,
       },
       apiKey.id,
+      apiKey.brand || undefined,
       (log) => {
         run(db,
           `INSERT INTO usage_logs (api_key_id, account_id, model, prompt_tokens, completion_tokens, cache_creation_tokens, cache_read_tokens, is_success, error_code, duration_ms)

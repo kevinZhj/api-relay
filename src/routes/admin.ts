@@ -36,8 +36,8 @@ export const registerAdminRoutes = (app: FastifyInstance, db: Database, markDirt
   // API Key 管理
   app.post('/admin/api-keys', async (request, reply) => {
     try {
-      const { name, rate_limit } = request.body as any
-      const result = createApiKey(db, name, rate_limit)
+      const { name, rate_limit, brand } = request.body as any
+      const result = createApiKey(db, name, brand, rate_limit)
       markDirty()
       return result
     } catch (err: any) {
