@@ -20,15 +20,14 @@ export const shouldMarkAccount = (statusCode: number): boolean => {
 }
 
 export const recoverRateLimited = (db: Database): number => {
-  // 用 SQLite 的时间函数确保格式一致
   const minutes = config.rateLimitRecoveryMinutes
   const limited = queryAll(db,
-    "SELECT id FROM accounts WHERE status = 'rate_limited' AND last_error_at <= datetime('now', '-' || ? || ' minutes')",
+    "SELECT id FROM accounts WHERE status = 'rate_limited' AND (julianday('now') - julianday(last_error_at)) * 1440 >= ?",
     [minutes]
   )
   if (limited.length === 0) return 0
   run(db,
-    "UPDATE accounts SET status = 'active', last_error = NULL, last_error_at = NULL, updated_at = datetime('now') WHERE status = 'rate_limited' AND last_error_at <= datetime('now', '-' || ? || ' minutes')",
+    "UPDATE accounts SET status = 'active', last_error = NULL, last_error_at = NULL, updated_at = datetime('now') WHERE status = 'rate_limited' AND (julianday('now') - julianday(last_error_at)) * 1440 >= ?",
     [minutes]
   )
   return limited.length
