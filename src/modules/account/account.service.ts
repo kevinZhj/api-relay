@@ -34,7 +34,7 @@ export interface CreateAccountInput {
 export const createAccount = (db: Database, input: CreateAccountInput): Account => {
   const id = runInsert(db,
     'INSERT INTO accounts (name, api_key, base_url, models, brand, priority) VALUES (?, ?, ?, ?, ?, ?)',
-    [input.name, input.api_key, input.base_url || 'https://api.moonshot.cn/v1', input.models || '', input.brand || '', input.priority || 0]
+    [input.name, input.api_key, input.base_url ?? 'https://api.moonshot.cn/v1', input.models ?? '', input.brand ?? '', input.priority ?? 0]
   )
   return queryOne(db, 'SELECT * FROM accounts WHERE id = ?', [id]) as Account
 }

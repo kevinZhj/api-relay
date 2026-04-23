@@ -48,11 +48,28 @@ const start = async () => {
     process.exit(1)
   }
 
+  let shuttingDown = false
+
   const shutdown = async () => {
+    if (shuttingDown) return
+    shuttingDown = true
     clearInterval(saveInterval)
     clearInterval(probeTimer)
     console.log('正在关闭...')
-    await app.close()
+
+    // 等待进行中的请求完成，最多 10s
+    const forceTimer = setTimeout(() => {
+      console.log('关闭超时，强制退出')
+      try { saveDb(db, config.dbPath) } catch {}
+      db.close()
+      process.exit(1)
+    }, 10_000)
+
+    try {
+      await app.close()
+      clearTimeout(forceTimer)
+    } catch {}
+
     try {
       saveDb(db, config.dbPath)
     } catch (err) {

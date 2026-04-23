@@ -1,9 +1,16 @@
 import { FastifyInstance } from 'fastify'
 import { Database } from 'sql.js'
-import { validateApiKey } from '../modules/api_key/api_key.service.js'
+import { validateApiKey, addUsedTokens } from '../modules/api_key/api_key.service.js'
 import { forwardRequest } from '../modules/proxy/proxy.service.js'
-import { openaiToAnthropic, anthropicToOpenai, convertStreamChunk } from '../modules/proxy/format_converter.js'
-import { run } from '../db/index.js'
+import { run, getLocalDateTime } from '../db/index.js'
+
+// 检查模型是否在白名单中（空字符串表示不限制）
+const isModelAllowed = (apiKey: any, model: string): boolean => {
+  if (!apiKey.allowed_models) return true
+  const allowed = apiKey.allowed_models.split(',').map((m: string) => m.trim().toLowerCase()).filter(Boolean)
+  if (allowed.length === 0) return true
+  return allowed.includes(model.toLowerCase())
+}
 
 export const registerChatRoutes = (app: FastifyInstance, db: Database, markDirty: () => void) => {
   app.post('/v1/chat/completions', async (request, reply) => {
@@ -19,28 +26,37 @@ export const registerChatRoutes = (app: FastifyInstance, db: Database, markDirty
     }
 
     const openaiBody = request.body as any
-    const anthropicBody = openaiToAnthropic(openaiBody)
-    const originalModel = openaiBody.model || 'kimi-k2.5'
+
+    // 模型白名单检查
+    if (openaiBody?.model && !isModelAllowed(apiKey, openaiBody.model)) {
+      return reply.status(403).send({ error: { message: `无权使用模型: ${openaiBody.model}`, type: 'permission_error' } })
+    }
 
     const result = await forwardRequest(
       db,
       {
         method: 'POST',
-        path: '/v1/messages',
+        path: '/v1/chat/completions',
         headers: {
           'content-type': 'application/json',
-          'anthropic-version': '2023-06-01',
+          'anthropic-version': request.headers['anthropic-version'] as string || '2023-06-01',
+          ...(request.headers['anthropic-beta'] ? { 'anthropic-beta': request.headers['anthropic-beta'] } : {}),
         },
-        body: anthropicBody,
+        body: openaiBody,
       },
       apiKey.id,
       apiKey.brand || undefined,
       (log) => {
         run(db,
-          `INSERT INTO usage_logs (api_key_id, account_id, model, prompt_tokens, completion_tokens, cache_creation_tokens, cache_read_tokens, is_success, error_code, duration_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [log.api_key_id, log.account_id, log.model, log.prompt_tokens, log.completion_tokens, log.cache_creation_tokens, log.cache_read_tokens, log.is_success, log.error_code, log.duration_ms]
+          `INSERT INTO usage_logs (api_key_id, account_id, model, prompt_tokens, completion_tokens, cache_creation_tokens, cache_read_tokens, is_success, error_code, duration_ms, device_name, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [log.api_key_id, log.account_id, log.model, log.prompt_tokens, log.completion_tokens, log.cache_creation_tokens, log.cache_read_tokens, log.is_success, log.error_code, log.duration_ms, apiKey.name, getLocalDateTime()]
         )
+        // 成功时累加 token 配额
+        if (log.is_success) {
+          const tokens = (log.prompt_tokens || 0) + (log.completion_tokens || 0)
+          if (tokens > 0) addUsedTokens(db, apiKey.id, tokens)
+        }
         markDirty()
       },
     )
@@ -49,31 +65,19 @@ export const registerChatRoutes = (app: FastifyInstance, db: Database, markDirty
       return reply.status(result.status).send(result.body)
     }
 
-    // 流式响应：转换 Anthropic SSE -> OpenAI SSE
+    // 流式响应：直接透传（doForward 已处理格式转换）
     if (result.stream && result.streamGenerator) {
-      reply.raw.writeHead(result.status, {
+      const streamHeaders: Record<string, string> = {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
         connection: 'keep-alive',
-      })
-      const decoder = new TextDecoder()
-      let buffer = ''
+      }
+      if (result.headers['x-request-id']) streamHeaders['x-request-id'] = result.headers['x-request-id']
+      if (result.headers['retry-after']) streamHeaders['retry-after'] = result.headers['retry-after']
+      reply.raw.writeHead(result.status, streamHeaders)
       try {
         for await (const chunk of result.streamGenerator) {
-          buffer += decoder.decode(chunk, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || ''
-          for (const line of lines) {
-            const converted = convertStreamChunk(line, originalModel)
-            if (converted) {
-              reply.raw.write(converted)
-            }
-          }
-        }
-        buffer += decoder.decode(undefined, { stream: false })
-        if (buffer.trim()) {
-          const converted = convertStreamChunk(buffer, originalModel)
-          if (converted) reply.raw.write(converted)
+          reply.raw.write(chunk)
         }
       } catch {
         // 客户端断开连接等错误
@@ -83,8 +87,7 @@ export const registerChatRoutes = (app: FastifyInstance, db: Database, markDirty
       return
     }
 
-    // 非流式响应：转换 Anthropic -> OpenAI
-    const openaiResp = anthropicToOpenai(result.body, originalModel)
-    return reply.status(result.status).send(openaiResp)
+    // 非流式响应：直接返回（doForward 已处理格式转换）
+    return reply.status(result.status).send(result.body)
   })
 }

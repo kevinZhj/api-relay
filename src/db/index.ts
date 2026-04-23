@@ -87,3 +87,18 @@ export const runInsert = (db: Database, sql: string, params: any[] = []): number
   const result = queryOne(db, 'SELECT last_insert_rowid() as id')
   return result ? result.id : 0
 }
+
+// 工具函数：生成北京时间字符串（YYYY-MM-DD HH:MM:SS+08:00）
+export const getLocalDateTime = (): string => {
+  const now = new Date()
+  // 获取北京时间（UTC+8）
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000
+  const bj = new Date(utc + 8 * 3600000)
+  const y = bj.getFullYear()
+  const M = String(bj.getMonth() + 1).padStart(2, '0')
+  const d = String(bj.getDate()).padStart(2, '0')
+  const h = String(bj.getHours()).padStart(2, '0')
+  const m = String(bj.getMinutes()).padStart(2, '0')
+  const s = String(bj.getSeconds()).padStart(2, '0')
+  return `${y}-${M}-${d} ${h}:${m}:${s}+08:00`
+}

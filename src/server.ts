@@ -8,7 +8,7 @@ import { registerAdminRoutes } from './routes/admin.js'
 import { registerAdminPage } from './routes/admin_page.js'
 
 export const createServer = (db: Database, markDirty: () => void) => {
-  const app = Fastify({ logger: false })
+  const app = Fastify({ logger: false, bodyLimit: 10 * 1024 * 1024 })
 
   app.register(cors, { origin: true })
 

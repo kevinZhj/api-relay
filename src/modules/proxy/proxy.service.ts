@@ -2,6 +2,7 @@ import { Database } from 'sql.js'
 import { selectAccount, selectNextAccount } from '../account/account.selector.js'
 import { updateAccountStatus, updateAccountUsage, Account } from '../account/account.service.js'
 import { recordSuccess, recordFailure } from '../account/account.stats.js'
+import { recordCircuitSuccess, recordCircuitFailure } from '../account/account.circuit.js'
 import { mapErrorToStatus, shouldRetry, shouldMarkAccount, recoverRateLimited } from '../health/health.service.js'
 import {
   openaiToAnthropic,
@@ -11,7 +12,7 @@ import {
   openaiToAnthropicResponse,
   convertStreamChunkOpenaiToAnthropic,
 } from './format_converter.js'
-import { config } from '../../config.js'
+import { config, buildApiUrl } from '../../config.js'
 
 export interface ProxyRequest {
   method: string
@@ -50,8 +51,16 @@ export const forwardRequest = async (
 
   const triedIds: number[] = []
   let lastError: any = null
+  let lastStatus = 0
 
   for (let attempt = 0; attempt < config.maxRetry; attempt++) {
+    // 重试间加入延迟抖动（429: 1-3s, 其他: 0-500ms）
+    if (attempt > 0) {
+      const delay = lastStatus === 429
+        ? 1000 + Math.random() * 2000
+        : Math.random() * 500
+      await new Promise(r => setTimeout(r, delay))
+    }
     const normalizedModel = normalizeModelName(proxyReq.body?.model)
     const account = triedIds.length === 0
       ? selectAccount(db, { modelName: normalizedModel, brand })
@@ -74,6 +83,7 @@ export const forwardRequest = async (
       const duration = Date.now() - startTime
 
       if (result.status >= 200 && result.status < 300) {
+        recordCircuitSuccess(account.id)
         if (!result.stream) {
           const usage = result.body?.usage
           const tokens = extractTokenUsage(usage)
@@ -118,7 +128,9 @@ export const forwardRequest = async (
       }
 
       lastError = result
+      lastStatus = result.status
       recordFailure(db, account.id)
+      recordCircuitFailure(account.id)
       if (shouldMarkAccount(result.status)) {
         const newStatus = mapErrorToStatus(result.status)
         updateAccountStatus(db, account.id, newStatus, `HTTP ${result.status}`)
@@ -185,13 +197,13 @@ const doForward = async (account: Account, proxyReq: ProxyRequest): Promise<Prox
   if (isAnthropicEntry) {
     // Anthropic 入口
     if (isAnthropicBackend) {
-      url = `${account.base_url}/v1/messages`
+      url = buildApiUrl(account.base_url, '/v1/messages')
       headers['x-api-key'] = account.api_key
       headers['anthropic-version'] = headers['anthropic-version'] || '2023-06-01'
     } else {
       // Anthropic → OpenAI 后端
       body = anthropicToOpenaiRequest(proxyReq.body)
-      url = `${account.base_url}/v1/chat/completions`
+      url = buildApiUrl(account.base_url, '/v1/chat/completions')
       headers['authorization'] = `Bearer ${account.api_key}`
     }
   } else {
@@ -199,12 +211,12 @@ const doForward = async (account: Account, proxyReq: ProxyRequest): Promise<Prox
     if (isAnthropicBackend) {
       // OpenAI → Anthropic 后端
       body = openaiToAnthropic(proxyReq.body)
-      url = `${account.base_url}/v1/messages`
+      url = buildApiUrl(account.base_url, '/v1/messages')
       headers['x-api-key'] = account.api_key
       headers['anthropic-version'] = '2023-06-01'
     } else {
       // OpenAI → OpenAI 后端
-      url = `${account.base_url}/v1/chat/completions`
+      url = buildApiUrl(account.base_url, '/v1/chat/completions')
       headers['authorization'] = `Bearer ${account.api_key}`
     }
   }
@@ -214,11 +226,31 @@ const doForward = async (account: Account, proxyReq: ProxyRequest): Promise<Prox
 
   const isStream = body?.stream === true
 
-  const resp = await fetch(url, {
-    method: proxyReq.method,
-    headers,
-    body: JSON.stringify(body),
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 60_000)
+
+  let resp: Response
+  try {
+    resp = await fetch(url, {
+      method: proxyReq.method,
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (err: any) {
+    clearTimeout(timeout)
+    if (err.name === 'AbortError') {
+      return {
+        status: 504,
+        headers: { 'content-type': 'application/json' },
+        body: { error: { message: '上游请求超时', type: 'timeout_error' } },
+        stream: false,
+        usedAccountId: account.id,
+      }
+    }
+    throw err
+  }
+  clearTimeout(timeout)
 
   if (isStream && resp.ok && resp.body) {
     const { generator, usage } = createStreamWithUsage(resp.body, isAnthropicEntry, isAnthropicBackend)
@@ -286,11 +318,22 @@ const createStreamWithUsage = (
           if (line.startsWith('data:')) {
             try {
               const data = JSON.parse(line.slice(5).trim())
-              if (data.type === 'message_start' && data.message?.usage) {
-                Object.assign(usage, data.message.usage)
-              }
-              if (data.type === 'message_delta' && data.usage) {
-                Object.assign(usage, data.usage)
+              if (isAnthropicBackend) {
+                // Anthropic 格式 usage
+                if (data.type === 'message_start' && data.message?.usage) {
+                  Object.assign(usage, data.message.usage)
+                }
+                if (data.type === 'message_delta' && data.usage) {
+                  Object.assign(usage, data.usage)
+                }
+              } else {
+                // OpenAI 格式 usage（最后一个 chunk 携带 usage）
+                if (data.usage) {
+                  Object.assign(usage, {
+                    input_tokens: data.usage.prompt_tokens,
+                    output_tokens: data.usage.completion_tokens,
+                  })
+                }
               }
             } catch {}
           }

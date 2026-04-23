@@ -65,4 +65,29 @@ export const MIGRATIONS = [
   `ALTER TABLE accounts ADD COLUMN weight INTEGER DEFAULT 100`,
   `ALTER TABLE accounts ADD COLUMN is_default INTEGER DEFAULT 0`,
   `ALTER TABLE api_keys ADD COLUMN brand TEXT DEFAULT ''`,
+  // 迁移：为 usage_logs 添加设备名称字段
+  `ALTER TABLE usage_logs ADD COLUMN device_name TEXT DEFAULT ''`,
+  `UPDATE usage_logs SET device_name = COALESCE((SELECT name FROM api_keys WHERE api_keys.id = usage_logs.api_key_id), '') WHERE device_name = '' OR device_name IS NULL`,
+  // 迁移：为 api_keys 添加过期时间字段
+  `ALTER TABLE api_keys ADD COLUMN expires_at TEXT DEFAULT NULL`,
+  // 迁移：创建分组表
+  `CREATE TABLE IF NOT EXISTS brands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+  )`,
+  // 迁移：为 api_keys 添加 Token 配额字段
+  `ALTER TABLE api_keys ADD COLUMN token_quota INTEGER DEFAULT 0`,
+  `ALTER TABLE api_keys ADD COLUMN used_tokens INTEGER DEFAULT 0`,
+  // 迁移：为 api_keys 添加模型白名单字段
+  `ALTER TABLE api_keys ADD COLUMN allowed_models TEXT DEFAULT ''`,
+  // 迁移：创建审计日志表
+  `CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id INTEGER,
+    detail TEXT DEFAULT '',
+    ip TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
+  )`,
 ]

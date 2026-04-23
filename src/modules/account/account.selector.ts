@@ -2,6 +2,7 @@ import { Database } from 'sql.js'
 import { Account } from './account.service.js'
 import { queryAll } from '../../db/index.js'
 import { getOrCreateStats } from './account.stats.js'
+import { isCircuitOpen } from './account.circuit.js'
 import { config } from '../../config.js'
 
 export interface RoutingOptions {
@@ -38,7 +39,7 @@ const calculateScore = (
 
   const priorityBoost = Math.pow(2, account.priority / 10)
 
-  return (normalizedLatency * (config.latencyWeight || 1.0))
+  return (normalizedLatency * (config.latencyWeight ?? 1.0))
     * failurePenalty
     * quotaPenalty
     / priorityBoost
@@ -48,7 +49,7 @@ export const selectAccount = (db: Database, options?: RoutingOptions): Account |
   const accounts = queryAll(db, `SELECT * FROM accounts WHERE status = 'active'`) as Account[]
   if (accounts.length === 0) return null
 
-  let candidates = accounts
+  let candidates = accounts.filter(a => !isCircuitOpen(a.id))
 
   if (options?.excludeIds?.length) {
     candidates = candidates.filter(a => !options.excludeIds!.includes(a.id))

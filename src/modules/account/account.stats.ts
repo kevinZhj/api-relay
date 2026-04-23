@@ -1,5 +1,5 @@
 import { Database } from 'sql.js'
-import { queryOne, run } from '../../db/index.js'
+import { queryOne, queryAll, run } from '../../db/index.js'
 
 export interface AccountStats {
   account_id: number
@@ -57,7 +57,7 @@ export const recordFailure = (db: Database, accountId: number): void => {
 }
 
 export const getAllStats = (db: Database): AccountStats[] => {
-  return queryOne(db, 'SELECT * FROM account_stats') as AccountStats[] || []
+  return queryAll(db, 'SELECT * FROM account_stats') as AccountStats[]
 }
 
 export const resetConsecutiveFailures = (db: Database, accountId: number): void => {

@@ -1,5 +1,5 @@
 import { Database } from 'sql.js'
-import { config } from '../../config.js'
+import { config, buildApiUrl } from '../../config.js'
 import { queryAll, run } from '../../db/index.js'
 import { listAccounts, updateAccountStatus } from '../account/account.service.js'
 import { recordSuccess, recordFailure, resetConsecutiveFailures } from '../account/account.stats.js'
@@ -10,18 +10,14 @@ export const probeAccount = async (db: Database, accountId: number): Promise<{ s
   if (!account || account.status !== 'active') return { success: false, latency: 0 }
 
   const isAnthropicBackend = account.protocol === 'anthropic' || (account.protocol === 'auto' && (account.base_url.includes('moonshot') || account.base_url.includes('kimi')))
-  const url = isAnthropicBackend
-    ? `${account.base_url}/v1/models`
-    : `${account.base_url}/v1/models`
 
-  const headers: Record<string, string> = {
-    'authorization': `Bearer ${account.api_key}`,
-    'x-api-key': account.api_key,
-  }
+  const headers: Record<string, string> = isAnthropicBackend
+    ? { 'x-api-key': account.api_key }
+    : { 'authorization': `Bearer ${account.api_key}` }
 
   const startTime = Date.now()
   try {
-    const resp = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(10000) })
+    const resp = await fetch(buildApiUrl(account.base_url, '/v1/models'), { method: 'GET', headers, signal: AbortSignal.timeout(10000) })
     const latency = Date.now() - startTime
 
     run(db,
@@ -49,7 +45,7 @@ export const probeAccount = async (db: Database, accountId: number): Promise<{ s
 }
 
 export const startHealthProbes = (db: Database): NodeJS.Timeout => {
-  const interval = (config.healthProbeInterval || 60) * 1000
+  const interval = (config.healthProbeInterval ?? 60) * 1000
   return setInterval(() => {
     const accounts = listAccounts(db)
     for (const account of accounts) {

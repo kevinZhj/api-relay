@@ -34,8 +34,8 @@ echo ========================================
 echo       API Relay - Smart Router
 echo ========================================
 echo.
-echo Service: http://localhost:3000
-echo Admin:   http://localhost:3000/admin/accounts
+echo Service: http://localhost:8088
+echo Admin:   http://localhost:8088/admin
 echo.
 echo Press Ctrl+C to stop
 echo ========================================
