@@ -16,7 +16,7 @@ $existing = Get-CimInstance Win32_Process | Where-Object {
     $_.Name -eq "node.exe" -and ($_.CommandLine -like "*tsx*" -or $_.CommandLine -like "*index.ts*")
 }
 if ($existing) {
-    [System.Windows.Forms.MessageBox]::Show("API中转站已经在运行中`n`nURL: http://localhost:3000`nAdmin: http://localhost:3000/admin/accounts", "提示", "OK", "Information")
+    [System.Windows.Forms.MessageBox]::Show("API中转站已经在运行中`n`nURL: http://localhost:8088`nAdmin: http://localhost:8088/admin/accounts", "提示", "OK", "Information")
     exit 0
 }
 
@@ -35,10 +35,10 @@ $notify.Visible = $true
 # 上下文菜单
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $menu.Items.Add("打开管理面板", $null, {
-    Start-Process "http://localhost:3000/admin/accounts"
+    Start-Process "http://localhost:8088/admin/accounts"
 }) | Out-Null
 $menu.Items.Add("复制 API URL", $null, {
-    Set-Clipboard "http://localhost:3000/v1"
+    Set-Clipboard "http://localhost:8088/v1"
     $notify.ShowBalloonTip(2000, "API中转站", "URL已复制到剪贴板", [System.Windows.Forms.ToolTipIcon]::Info)
 }) | Out-Null
 $menu.Items.Add("-") | Out-Null
@@ -71,12 +71,12 @@ $process = [System.Diagnostics.Process]::Start($psi)
 Start-Sleep -Seconds 2
 $started = $false
 try {
-    $resp = Invoke-WebRequest -Uri "http://localhost:3000/admin/accounts" -Headers @{ "Authorization" = "Bearer admin123" } -TimeoutSec 3 -UseBasicParsing
+    $resp = Invoke-WebRequest -Uri "http://localhost:8088/admin/accounts" -Headers @{ "Authorization" = "Bearer $env:ADMIN_KEY" } -TimeoutSec 3 -UseBasicParsing
     if ($resp.StatusCode -eq 200) { $started = $true }
 } catch {}
 
 if ($started) {
-    $notify.Text = "API中转站 - 运行中`nhttp://localhost:3000"
+    $notify.Text = "API中转站 - 运行中`nhttp://localhost:8088"
     $notify.Icon = [System.Drawing.SystemIcons]::Shield
     $notify.ShowBalloonTip(3000, "API中转站", "服务已在后台启动`n点击托盘图标可打开管理面板或停止", [System.Windows.Forms.ToolTipIcon]::Info)
 } else {

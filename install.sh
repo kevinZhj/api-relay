@@ -58,8 +58,8 @@ setup_env() {
   echo "配置环境变量..."
   echo ""
 
-  read -p "监听端口 [3000]: " PORT
-  PORT=${PORT:-3000}
+  read -p "监听端口 [8088]: " PORT
+  PORT=${PORT:-8088}
 
   read -p "监听地址 [0.0.0.0]: " HOST
   HOST=${HOST:-0.0.0.0}

@@ -28,8 +28,8 @@ Write-Host "==================================" -ForegroundColor Green
 Write-Host "     API Relay - Smart Router     " -ForegroundColor Green
 Write-Host "==================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Service: http://localhost:3000" -ForegroundColor Cyan
-Write-Host "Admin:   http://localhost:3000/admin/accounts" -ForegroundColor Cyan
+Write-Host "Service: http://localhost:8088" -ForegroundColor Cyan
+Write-Host "Admin:   http://localhost:8088/admin/accounts" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Press Ctrl+C to stop" -ForegroundColor DarkGray
 Write-Host "==================================" -ForegroundColor Green

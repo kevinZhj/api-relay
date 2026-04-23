@@ -43,7 +43,7 @@ cp .env.example .env
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| `PORT` | 服务端口 | 3000 |
+| `PORT` | 服务端口 | 8088 |
 | `HOST` | 监听地址 | 0.0.0.0 |
 | `DB_PATH` | 数据库路径 | ./data/relay.db |
 | `ADMIN_KEY` | 管理员密钥 | 必须修改 |
@@ -61,7 +61,7 @@ pnpm dev
 pnpm start
 ```
 
-启动后访问 `http://localhost:3000/admin` 进入管理面板。
+启动后访问 `http://localhost:8088/admin` 进入管理面板。
 
 ## 使用方式
 
@@ -79,13 +79,13 @@ pnpm start
 
 **OpenAI 协议：**
 ```
-Base URL: http://your-server:3000/v1
+Base URL: http://your-server:8088/v1
 API Key:  sk-relay-xxx
 ```
 
 **Anthropic 协议：**
 ```
-Base URL: http://your-server:3000
+Base URL: http://your-server:8088
 API Key:  sk-relay-xxx
 ```
 
